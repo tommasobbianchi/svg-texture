@@ -37,7 +37,7 @@ class TestSimpleSVGs:
             <rect x="10" y="10" width="80" height="80" fill="none" stroke="black"/>
         </svg>'''
         result = process_svg(svg)
-        lines = [l for l in result.strip().split("\n") if not l.startswith("#")]
+        lines = [l for l in result.strip().split("|") if not l.startswith("#")]
         # Should only have viewbox, no paths
         assert len(lines) == 1
 
@@ -97,7 +97,7 @@ class TestUseElements:
             <use href="#myRect" x="60" y="10"/>
         </svg>'''
         result = process_svg(svg)
-        lines = [l for l in result.strip().split("\n") if not l.startswith("#") and not l.startswith("V")]
+        lines = [l for l in result.strip().split("|") if not l.startswith("#") and not l.startswith("V")]
         # Should have 2 paths (one for each use)
         assert len(lines) == 2
 
@@ -108,7 +108,7 @@ class TestEvenOdd:
             <path d="M 0,0 L 100,0 L 100,100 L 0,100 Z" fill="black" fill-rule="evenodd"/>
         </svg>'''
         result = process_svg(svg)
-        lines = [l for l in result.strip().split("\n") if not l.startswith("#") and not l.startswith("V")]
+        lines = [l for l in result.strip().split("|") if not l.startswith("#") and not l.startswith("V")]
         assert lines[0].startswith("E")
 
     def test_default_nonzero(self):
@@ -116,7 +116,7 @@ class TestEvenOdd:
             <path d="M 0,0 L 100,0 L 100,100 L 0,100 Z" fill="black"/>
         </svg>'''
         result = process_svg(svg)
-        lines = [l for l in result.strip().split("\n") if not l.startswith("#") and not l.startswith("V")]
+        lines = [l for l in result.strip().split("|") if not l.startswith("#") and not l.startswith("V")]
         assert lines[0].startswith("N")
 
 
@@ -125,7 +125,7 @@ class TestEdgeCases:
         svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
         </svg>'''
         result = process_svg(svg)
-        lines = [l for l in result.strip().split("\n") if not l.startswith("#")]
+        lines = [l for l in result.strip().split("|") if not l.startswith("#")]
         assert len(lines) == 1  # Only viewbox
 
     def test_hidden_element(self):
@@ -133,7 +133,7 @@ class TestEdgeCases:
             <rect x="10" y="10" width="80" height="80" fill="black" display="none"/>
         </svg>'''
         result = process_svg(svg)
-        lines = [l for l in result.strip().split("\n") if not l.startswith("#")]
+        lines = [l for l in result.strip().split("|") if not l.startswith("#")]
         assert len(lines) == 1  # Only viewbox
 
     def test_style_fill(self):
@@ -141,7 +141,7 @@ class TestEdgeCases:
             <rect x="10" y="10" width="80" height="80" style="fill:red"/>
         </svg>'''
         result = process_svg(svg)
-        lines = [l for l in result.strip().split("\n") if not l.startswith("#") and not l.startswith("V")]
+        lines = [l for l in result.strip().split("|") if not l.startswith("#") and not l.startswith("V")]
         assert len(lines) == 1
 
     def test_polygon(self):

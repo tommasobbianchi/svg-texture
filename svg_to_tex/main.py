@@ -2,7 +2,7 @@
 CLI entry point for SVG to SVGTEX converter.
 
 Usage:
-    python -m svg_to_tex input.svg [-o output.txt] [--precision 2] [--copy]
+    python -m svg_to_tex input.svg [-o output.txt] [--stdout] [--precision 2] [--copy]
 """
 
 import argparse
@@ -25,8 +25,13 @@ def main():
     )
     parser.add_argument(
         "-o", "--output",
-        help="Output file path (default: stdout)",
+        help="Output file path (default: <input_name>.txt)",
         default=None,
+    )
+    parser.add_argument(
+        "--stdout",
+        action="store_true",
+        help="Print output to stdout instead of writing a file",
     )
     parser.add_argument(
         "--precision",
@@ -80,12 +85,12 @@ def main():
         print(f"Output size: {len(svgtex)} chars", file=sys.stderr)
 
     # Output
-    if args.output:
-        output_path = Path(args.output)
+    if args.stdout:
+        print(svgtex)
+    else:
+        output_path = Path(args.output) if args.output else input_path.with_suffix(".txt")
         output_path.write_text(svgtex, encoding="utf-8")
         print(f"Written to {output_path}", file=sys.stderr)
-    else:
-        print(svgtex)
 
     # Clipboard
     if args.copy:

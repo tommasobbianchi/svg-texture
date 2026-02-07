@@ -65,7 +65,7 @@ class TestEncodeSvgtex:
             }
         ]
         result = encode_svgtex(viewbox, paths)
-        lines = result.strip().split("\n")
+        lines = result.strip().split("|")
         assert lines[0] == "V0,0,100,100"
         assert lines[1].startswith("N")
 

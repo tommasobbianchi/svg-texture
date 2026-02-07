@@ -1,15 +1,5 @@
-// SVG Texture FeatureScript
-// Applies SVGTEX pattern data as 3D raised/recessed textures on Onshape parts.
-//
-// SVGTEX format (paste from Python preprocessor output):
-//   V<minX>,<minY>,<width>,<height>
-//   <fillRule><commands>
-//   Fill rule: E (evenodd) or N (nonzero)
-//   Commands: M x,y | L x,y | C x1,y1,x2,y2,x,y | A cx,cy,r,startDeg,sweepDeg | Z
-
-FeatureScript 2268;
-import(path : "onshape/std/common.fs", version : "2268.0");
-import(path : "onshape/std/geometry.fs", version : "2268.0");
+FeatureScript 2878;
+import(path : "onshape/std/common.fs", version : "2878.0");
 
 // ============================================================================
 // Section 1: Enums & Constants
@@ -61,8 +51,7 @@ export const TILE_COUNT_BOUNDS =
     (unitless) : [1, 2, 2500]
 } as IntegerBoundSpec;
 
-// Maximum sketch entities before warning
-const MAX_ENTITIES = 3000;
+// Sketch entity warning threshold
 const ENTITY_WARNING_THRESHOLD = 2500;
 
 /**
@@ -95,46 +84,21 @@ export function svgTextureEditLogic(context is Context, id is Id,
 // Section 2: SVGTEX Parser
 // ============================================================================
 
-// Parsed representation of SVGTEX data
-type SvgTexData typecheck canBeSvgTexData;
-predicate canBeSvgTexData(value)
-{
-    value is map;
-    value.viewBox is map;
-    value.paths is array;
-}
-
-// A single parsed path
-type SvgTexPath typecheck canBeSvgTexPath;
-predicate canBeSvgTexPath(value)
-{
-    value is map;
-    value.fillRule is string;
-    value.commands is array;
-}
-
-// A single command
-type SvgTexCommand typecheck canBeSvgTexCommand;
-predicate canBeSvgTexCommand(value)
-{
-    value is map;
-    value.cmd is string;
-    value.params is array;
-}
+// Parsed representation types (used as documentation; maps used at runtime)
 
 /**
  * Parse a complete SVGTEX string into structured data.
  */
 function parseSvgTex(data is string) returns map
 {
-    var lines = splitString(data, "\n");
+    var lines = splitString(data, "|");
     var viewBox = { "minX" : 0, "minY" : 0, "width" : 100, "height" : 100 };
     var paths = [];
 
     for (var i = 0; i < size(lines); i += 1)
     {
         var line = trim(lines[i]);
-        if (size(line) == 0)
+        if (length(line) == 0)
             continue;
 
         var firstChar = substring(line, 0, 1);
@@ -152,7 +116,7 @@ function parseSvgTex(data is string) returns map
         else if (firstChar == "E" || firstChar == "N")
         {
             var fillRule = (firstChar == "E") ? "evenodd" : "nonzero";
-            var cmdStr = substring(line, 1, size(line));
+            var cmdStr = substring(line, 1, length(line));
             var commands = parseCommands(cmdStr);
             paths = append(paths, {
                 "fillRule" : fillRule,
@@ -172,13 +136,13 @@ function parseSvgTex(data is string) returns map
  */
 function parseViewBox(line is string) returns map
 {
-    var numStr = substring(line, 1, size(line));
+    var numStr = substring(line, 1, length(line));
     var parts = splitString(numStr, ",");
     return {
-        "minX" : stringToNumber(parts[0]),
-        "minY" : stringToNumber(parts[1]),
-        "width" : stringToNumber(parts[2]),
-        "height" : stringToNumber(parts[3])
+        "minX" : svgTexParseNum(parts[0]),
+        "minY" : svgTexParseNum(parts[1]),
+        "width" : svgTexParseNum(parts[2]),
+        "height" : svgTexParseNum(parts[3])
     };
 }
 
@@ -194,7 +158,7 @@ function parseCommands(cmdStr is string) returns array
     for (var i = 0; i < size(tokens); i += 1)
     {
         var token = trim(tokens[i]);
-        if (size(token) == 0)
+        if (length(token) == 0)
             continue;
 
         var cmdChar = substring(token, 0, 1);
@@ -206,12 +170,12 @@ function parseCommands(cmdStr is string) returns array
         }
         else
         {
-            var paramStr = substring(token, 1, size(token));
+            var paramStr = substring(token, 1, length(token));
             var paramParts = splitString(paramStr, ",");
             var params = [];
             for (var j = 0; j < size(paramParts); j += 1)
             {
-                params = append(params, stringToNumber(paramParts[j]));
+                params = append(params, svgTexParseNum(paramParts[j]));
             }
             command.params = params;
         }
@@ -225,7 +189,7 @@ function parseCommands(cmdStr is string) returns array
 /**
  * Convert string to number. Handles integers and decimals.
  */
-function stringToNumber(s is string) returns number
+function svgTexParseNum(s is string) returns number
 {
     // FeatureScript has built-in string-to-number
     return evaluate(s) as number;
@@ -238,7 +202,7 @@ function splitString(s is string, delim is string) returns array
 {
     var result = [];
     var current = "";
-    for (var i = 0; i < size(s); i += 1)
+    for (var i = 0; i < length(s); i += 1)
     {
         var ch = substring(s, i, i + 1);
         if (ch == delim)
@@ -261,7 +225,7 @@ function splitString(s is string, delim is string) returns array
 function trim(s is string) returns string
 {
     var start = 0;
-    var end = size(s);
+    var end = length(s);
     while (start < end && (substring(s, start, start + 1) == " " ||
                            substring(s, start, start + 1) == "\t" ||
                            substring(s, start, start + 1) == "\r"))
@@ -283,7 +247,7 @@ function trim(s is string) returns string
  */
 function evaluate(s is string) returns number
 {
-    if (size(s) == 0)
+    if (length(s) == 0)
         return 0;
 
     var negative = false;
@@ -305,7 +269,7 @@ function evaluate(s is string) returns number
     var fracDiv = 1;
     var inFrac = false;
 
-    while (idx < size(s))
+    while (idx < length(s))
     {
         var ch = substring(s, idx, idx + 1);
         if (ch == ".")
@@ -827,10 +791,8 @@ export const svgTexture = defineFeature(function(context is Context, id is Id, d
         definition.targetFace is Query;
 
         // -- SVG data input --
-        annotation { "Name" : "SVG data",
-                     "UIHint" : UIHint.REMEMBER_PREVIOUS_VALUE,
-                     "MaxLength" : 10000 }
-        definition.svgData is string;
+        annotation { "Name" : "SVGTEX file" }
+        definition.svgtexFile is TextData;
 
         // -- Dimensions --
         annotation { "Group Name" : "Pattern Size", "Collapsed By Default" : false }
@@ -901,13 +863,14 @@ export const svgTexture = defineFeature(function(context is Context, id is Id, d
         }
 
         // Parse SVGTEX data
-        if (size(definition.svgData) == 0)
+        if (definition.svgtexFile == undefined || definition.svgtexFile.textData == undefined ||
+            length(definition.svgtexFile.textData) == 0)
         {
-            reportFeatureError(context, id, "Please paste SVGTEX data.");
+            reportFeatureError(context, id, "Please select a SVGTEX file.");
             return;
         }
 
-        var svgData = parseSvgTex(definition.svgData);
+        var svgData = parseSvgTex(definition.svgtexFile.textData);
 
         if (size(svgData.paths) == 0)
         {

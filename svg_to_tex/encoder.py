@@ -103,7 +103,7 @@ def encode_svgtex(
         )
         lines.append(line)
 
-    result = "\n".join(lines)
+    result = "|".join(lines)
 
     # Add warnings as comments
     warnings = []
@@ -120,6 +120,9 @@ def encode_svgtex(
         warnings.append(f"# WARNING: {total_entities} sketch entities. Tiling may exceed Onshape limits.")
 
     if warnings:
-        result = "\n".join(warnings) + "\n" + result
+        # Warnings go to stderr via CLI, not into the SVGTEX string
+        import sys
+        for w in warnings:
+            print(w, file=sys.stderr)
 
     return result
