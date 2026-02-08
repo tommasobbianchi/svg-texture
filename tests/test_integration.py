@@ -4,11 +4,15 @@ import pytest
 from svg_to_tex.svg_parser import parse_svg
 from svg_to_tex.region_analyzer import filter_filled_paths
 from svg_to_tex.encoder import encode_svgtex
+from svg_to_tex.stroke_outliner import stroke_to_outlines
 
 
-def process_svg(svg_content: str, precision: int = 2) -> str:
+def process_svg(svg_content: str, precision: int = 2, include_strokes: bool = False,
+                stroke_width: float = None) -> str:
     """Full pipeline: SVG string -> SVGTEX string."""
-    viewbox, paths = parse_svg(svg_content)
+    viewbox, paths = parse_svg(svg_content, include_strokes=include_strokes)
+    if include_strokes:
+        paths = stroke_to_outlines(paths, stroke_width_override=stroke_width)
     filled = filter_filled_paths(paths)
     return encode_svgtex(viewbox, filled, precision)
 
@@ -158,3 +162,64 @@ class TestEdgeCases:
         </svg>'''
         result = process_svg(svg)
         assert "V0,0,200,150" in result
+
+
+class TestStrokeIntegration:
+    def test_stroke_only_rect(self):
+        """Stroke-only rect produces outline with include_strokes=True."""
+        svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <rect x="10" y="10" width="80" height="80" fill="none" stroke="black" stroke-width="2"/>
+        </svg>'''
+        result = process_svg(svg, include_strokes=True)
+        parts = [l for l in result.strip().split("|") if not l.startswith("#") and not l.startswith("V")]
+        assert len(parts) >= 1
+
+    def test_stroke_only_line(self):
+        """A <line> element with stroke produces outline."""
+        svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <line x1="10" y1="50" x2="90" y2="50" stroke="black" stroke-width="3"/>
+        </svg>'''
+        result = process_svg(svg, include_strokes=True)
+        parts = [l for l in result.strip().split("|") if not l.startswith("#") and not l.startswith("V")]
+        assert len(parts) >= 1
+
+    def test_stroke_style_attribute(self):
+        """Stroke defined in style attribute is detected."""
+        svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <path d="M 10,10 L 90,10 L 90,90" style="fill:none;stroke:#000;stroke-width:2"/>
+        </svg>'''
+        result = process_svg(svg, include_strokes=True)
+        parts = [l for l in result.strip().split("|") if not l.startswith("#") and not l.startswith("V")]
+        assert len(parts) >= 1
+
+    def test_default_ignores_strokes(self):
+        """Without include_strokes, stroke-only paths are still ignored."""
+        svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <rect x="10" y="10" width="80" height="80" fill="none" stroke="black" stroke-width="2"/>
+        </svg>'''
+        result = process_svg(svg)
+        parts = [l for l in result.strip().split("|") if not l.startswith("#") and not l.startswith("V")]
+        assert len(parts) == 0
+
+    def test_mixed_fill_and_stroke(self):
+        """SVG with both filled and stroke-only elements."""
+        svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <rect x="10" y="10" width="30" height="30" fill="blue"/>
+            <line x1="50" y1="50" x2="90" y2="90" stroke="red" stroke-width="2"/>
+        </svg>'''
+        result = process_svg(svg, include_strokes=True)
+        parts = [l for l in result.strip().split("|") if not l.startswith("#") and not l.startswith("V")]
+        assert len(parts) == 2
+
+    def test_stroke_width_override(self):
+        """CLI stroke-width override affects output."""
+        svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <path d="M 0,50 L 100,50" fill="none" stroke="black" stroke-width="1"/>
+        </svg>'''
+        narrow = process_svg(svg, include_strokes=True, stroke_width=1.0)
+        wide = process_svg(svg, include_strokes=True, stroke_width=5.0)
+        # Both should produce output, but with different coordinates
+        assert narrow != wide
+        # Wide outline should have larger Y offset from center (50)
+        assert "52.5" in wide  # 50 + 5/2 = 52.5
+        assert "50.5" in narrow  # 50 + 1/2 = 50.5

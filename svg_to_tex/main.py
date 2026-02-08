@@ -12,6 +12,7 @@ from pathlib import Path
 from .svg_parser import parse_svg
 from .region_analyzer import filter_filled_paths, estimate_entity_count
 from .encoder import encode_svgtex
+from .stroke_outliner import stroke_to_outlines
 
 
 def main():
@@ -49,6 +50,17 @@ def main():
         action="store_true",
         help="Print statistics to stderr",
     )
+    parser.add_argument(
+        "--include-strokes",
+        action="store_true",
+        help="Convert stroke-only paths to filled outlines",
+    )
+    parser.add_argument(
+        "--stroke-width",
+        type=float,
+        default=None,
+        help="Override stroke width for all stroked paths (default: use SVG attribute)",
+    )
 
     args = parser.parse_args()
 
@@ -62,10 +74,14 @@ def main():
 
     # Process
     try:
-        viewbox, paths = parse_svg(svg_content)
+        viewbox, paths = parse_svg(svg_content, include_strokes=args.include_strokes)
     except Exception as e:
         print(f"Error parsing SVG: {e}", file=sys.stderr)
         sys.exit(1)
+
+    # Convert strokes to outlines
+    if args.include_strokes:
+        paths = stroke_to_outlines(paths, stroke_width_override=args.stroke_width)
 
     # Filter to filled paths
     filled_paths = filter_filled_paths(paths)

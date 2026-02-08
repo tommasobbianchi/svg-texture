@@ -107,9 +107,44 @@ def _get_fill_info(elem: ET.Element) -> Tuple[bool, str]:
     return has_fill, fill_rule
 
 
+def _get_stroke_info(elem: ET.Element) -> Tuple[bool, float]:
+    """Determine if element has a visible stroke and its width.
+
+    Returns (has_stroke, stroke_width).
+    """
+    stroke = elem.get("stroke", "")
+    style = elem.get("style", "")
+    stroke_width_attr = elem.get("stroke-width", "")
+
+    stroke_from_style = None
+    stroke_width_from_style = None
+    for prop in style.split(";"):
+        prop = prop.strip()
+        if prop.startswith("stroke:"):
+            stroke_from_style = prop.split(":", 1)[1].strip()
+        elif prop.startswith("stroke-width:"):
+            stroke_width_from_style = prop.split(":", 1)[1].strip()
+
+    effective_stroke = stroke_from_style if stroke_from_style is not None else stroke
+    if not effective_stroke:
+        effective_stroke = "none"
+
+    has_stroke = effective_stroke.lower() not in ("none", "")
+
+    sw_str = stroke_width_from_style if stroke_width_from_style is not None else stroke_width_attr
+    try:
+        sw_str_clean = "".join(c for c in sw_str if c.isdigit() or c == "." or c == "-")
+        stroke_width = float(sw_str_clean) if sw_str_clean else 1.0
+    except (ValueError, TypeError):
+        stroke_width = 1.0
+
+    return has_stroke, stroke_width
+
+
 def walk_elements(
     elem: ET.Element,
     parent_transform: List[float] = None,
+    include_strokes: bool = False,
 ) -> List[dict]:
     """Recursively walk SVG element tree, extracting path data.
 
@@ -117,8 +152,9 @@ def walk_elements(
         {
             'commands': [(cmd, params), ...],  # Normalized absolute commands
             'fill_rule': 'evenodd' | 'nonzero',
-            'transform': [a, b, c, d, e, f],
         }
+    When include_strokes is True, stroke-only paths are also returned with
+    additional 'source': 'stroke' and 'stroke_width' keys.
     """
     if parent_transform is None:
         parent_transform = identity()
@@ -147,31 +183,43 @@ def walk_elements(
 
         if d:
             has_fill, fill_rule = _get_fill_info(elem)
-            if has_fill:
-                # Parse and normalize
-                raw_cmds = parse_path(d)
-                norm_cmds = normalize_commands(raw_cmds)
+            raw_cmds = parse_path(d)
+            norm_cmds = normalize_commands(raw_cmds)
 
-                if norm_cmds:
-                    # Apply accumulated transform
-                    transformed = apply_to_path_commands(combined, norm_cmds)
+            if norm_cmds:
+                transformed = apply_to_path_commands(combined, norm_cmds)
+
+                if has_fill:
                     results.append({
                         "commands": transformed,
                         "fill_rule": fill_rule,
                     })
+                elif include_strokes:
+                    has_stroke, stroke_width = _get_stroke_info(elem)
+                    if has_stroke:
+                        results.append({
+                            "commands": transformed,
+                            "fill_rule": "nonzero",
+                            "source": "stroke",
+                            "stroke_width": stroke_width,
+                        })
 
     # Recurse into children (for groups, svg, etc.)
     for child in elem:
-        results.extend(walk_elements(child, combined))
+        results.extend(walk_elements(child, combined, include_strokes))
 
     return results
 
 
-def parse_svg(svg_content: str) -> Tuple[Tuple[float, float, float, float], List[dict]]:
-    """Parse SVG content string and extract all filled path data.
+def parse_svg(
+    svg_content: str,
+    include_strokes: bool = False,
+) -> Tuple[Tuple[float, float, float, float], List[dict]]:
+    """Parse SVG content string and extract path data.
 
     Args:
         svg_content: SVG file content as string.
+        include_strokes: If True, also extract stroke-only paths.
 
     Returns:
         (viewbox, paths) where:
@@ -184,6 +232,6 @@ def parse_svg(svg_content: str) -> Tuple[Tuple[float, float, float, float], List
     resolve_uses(root)
 
     viewbox = parse_viewbox(root)
-    paths = walk_elements(root)
+    paths = walk_elements(root, include_strokes=include_strokes)
 
     return viewbox, paths
