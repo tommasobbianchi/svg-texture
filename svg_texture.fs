@@ -7,9 +7,9 @@ import(path : "onshape/std/common.fs", version : "2878.0");
 
 export enum TextureDirection
 {
-    annotation { "Name" : "Add" }
+    annotation { "Name" : "Raised" }
     RAISED,
-    annotation { "Name" : "Remove" }
+    annotation { "Name" : "Recessed" }
     RECESSED
 }
 
@@ -2673,23 +2673,47 @@ function handlePlanarFace(context is Context, id is Id, face is Query,
 
     var extrudeDir = (definition.direction == TextureDirection.RAISED) ? 1 : -1;
     var extrudeId = id + "extrude";
-    opExtrude(context, extrudeId, {
-        "entities" : sketchRegions,
-        "direction" : facePlane.normal * extrudeDir,
-        "endBound" : BoundingType.BLIND,
-        "endDepth" : definition.depth
-    });
+    try silent
+    {
+        opExtrude(context, extrudeId, {
+            "entities" : sketchRegions,
+            "direction" : facePlane.normal * extrudeDir,
+            "endBound" : BoundingType.BLIND,
+            "endDepth" : definition.depth
+        });
+    }
+
+    var extrudedBodies = qCreatedBy(extrudeId, EntityType.BODY);
+    if (size(evaluateQuery(context, extrudedBodies)) == 0)
+    {
+        reportFeatureWarning(context, id, "Could not extrude texture. The SVG may have overlapping or self-intersecting geometry.");
+        opDeleteBodies(context, id + "deleteSketch", { "entities" : qCreatedBy(sketchId, EntityType.BODY) });
+        return;
+    }
 
     var targetBody = qOwnerBody(face);
-    var extrudedBodies = qCreatedBy(extrudeId, EntityType.BODY);
 
     var boolId = id + "boolean";
-    opBoolean(context, boolId, {
-        "tools" : extrudedBodies,
-        "targets" : targetBody,
-        "operationType" : (definition.direction == TextureDirection.RAISED) ?
-            BooleanOperationType.UNION : BooleanOperationType.SUBTRACTION
-    });
+    try silent
+    {
+        opBoolean(context, boolId, {
+            "tools" : extrudedBodies,
+            "targets" : targetBody,
+            "operationType" : (definition.direction == TextureDirection.RAISED) ?
+                BooleanOperationType.UNION : BooleanOperationType.SUBTRACTION
+        });
+    }
+
+    // Clean up any leftover bodies from failed boolean
+    var leftoverBodies = qCreatedBy(extrudeId, EntityType.BODY);
+    if (size(evaluateQuery(context, leftoverBodies)) > 0)
+    {
+        try silent
+        {
+            opDeleteBodies(context, id + "cleanupExtrude", { "entities" : leftoverBodies });
+        }
+        reportFeatureWarning(context, id, "Boolean operation failed — pattern may have overlapping geometry. Try reducing depth or simplifying the SVG.");
+    }
 
     opDeleteBodies(context, id + "deleteSketch", { "entities" : qCreatedBy(sketchId, EntityType.BODY) });
 }
@@ -2723,30 +2747,67 @@ function handleCylindricalFace(context is Context, id is Id, face is Query,
     if (definition.direction == TextureDirection.RAISED)
     {
         var extrudeId = id + "extrudeOut";
-        opExtrude(context, extrudeId, {
-            "entities" : sketchRegions,
-            "direction" : tangentPlane.normal,
-            "endBound" : BoundingType.BLIND,
-            "endDepth" : definition.depth
-        });
+        try silent
+        {
+            opExtrude(context, extrudeId, {
+                "entities" : sketchRegions,
+                "direction" : tangentPlane.normal,
+                "endBound" : BoundingType.BLIND,
+                "endDepth" : definition.depth
+            });
+        }
+
+        var extrudedBodies = qCreatedBy(extrudeId, EntityType.BODY);
+        if (size(evaluateQuery(context, extrudedBodies)) == 0)
+        {
+            reportFeatureWarning(context, id, "Could not extrude texture on cylindrical face. The SVG may have overlapping or self-intersecting geometry.");
+            opDeleteBodies(context, id + "deleteSketch", { "entities" : qCreatedBy(sketchId, EntityType.BODY) });
+            return;
+        }
+
         var boolId = id + "boolean";
-        opBoolean(context, boolId, {
-            "tools" : qCreatedBy(extrudeId, EntityType.BODY),
-            "targets" : targetBody,
-            "operationType" : BooleanOperationType.UNION
-        });
+        try silent
+        {
+            opBoolean(context, boolId, {
+                "tools" : extrudedBodies,
+                "targets" : targetBody,
+                "operationType" : BooleanOperationType.UNION
+            });
+        }
+
+        // Clean up leftover bodies from failed boolean
+        var leftoverBodies = qCreatedBy(extrudeId, EntityType.BODY);
+        if (size(evaluateQuery(context, leftoverBodies)) > 0)
+        {
+            try silent
+            {
+                opDeleteBodies(context, id + "cleanupExtrude", { "entities" : leftoverBodies });
+            }
+            reportFeatureWarning(context, id, "Boolean operation failed on cylindrical face — pattern may have overlapping geometry.");
+        }
     }
     else
     {
         var extrudeId = id + "extrude";
-        opExtrude(context, extrudeId, {
-            "entities" : sketchRegions,
-            "direction" : -tangentPlane.normal,
-            "endBound" : BoundingType.BLIND,
-            "endDepth" : cylInfo.radius + definition.depth
-        });
+        try silent
+        {
+            opExtrude(context, extrudeId, {
+                "entities" : sketchRegions,
+                "direction" : -tangentPlane.normal,
+                "endBound" : BoundingType.BLIND,
+                "endDepth" : cylInfo.radius + definition.depth
+            });
+        }
+
         var extrudedBodies = qCreatedBy(extrudeId, EntityType.BODY);
-        try
+        if (size(evaluateQuery(context, extrudedBodies)) == 0)
+        {
+            reportFeatureWarning(context, id, "Could not extrude texture on cylindrical face. The SVG may have overlapping or self-intersecting geometry.");
+            opDeleteBodies(context, id + "deleteSketch", { "entities" : qCreatedBy(sketchId, EntityType.BODY) });
+            return;
+        }
+
+        try silent
         {
             var intersectId = id + "intersect";
             opBoolean(context, intersectId, {
@@ -2762,14 +2823,31 @@ function handleCylindricalFace(context is Context, id is Id, face is Query,
                 "operationType" : BooleanOperationType.SUBTRACTION
             });
         }
-        catch
+
+        // Fallback: try direct subtraction
+        var leftoverBodies = qCreatedBy(extrudeId, EntityType.BODY);
+        if (size(evaluateQuery(context, leftoverBodies)) > 0)
         {
-            var boolId = id + "booleanFallback";
-            opBoolean(context, boolId, {
-                "tools" : extrudedBodies,
-                "targets" : targetBody,
-                "operationType" : BooleanOperationType.SUBTRACTION
-            });
+            try silent
+            {
+                var boolId = id + "booleanFallback";
+                opBoolean(context, boolId, {
+                    "tools" : leftoverBodies,
+                    "targets" : targetBody,
+                    "operationType" : BooleanOperationType.SUBTRACTION
+                });
+            }
+
+            // If still leftover, clean up and warn
+            var remaining = qCreatedBy(extrudeId, EntityType.BODY);
+            if (size(evaluateQuery(context, remaining)) > 0)
+            {
+                try silent
+                {
+                    opDeleteBodies(context, id + "cleanupExtrude", { "entities" : remaining });
+                }
+                reportFeatureWarning(context, id, "Boolean operation failed on cylindrical face — pattern may have overlapping geometry.");
+            }
         }
     }
 
