@@ -3,16 +3,65 @@ CLI entry point for SVG to SVGTEX converter.
 
 Usage:
     python -m svg_to_tex input.svg [-o output.txt] [--stdout] [--precision 2] [--copy]
+
+Note: The FeatureScript plugin can now parse SVG files directly.
+This CLI is optional, for users who prefer pre-converting to SVGTEX format.
 """
 
 import argparse
+import re
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from .svg_parser import parse_svg
 from .region_analyzer import filter_filled_paths, estimate_entity_count
 from .encoder import encode_svgtex
 from .stroke_outliner import stroke_to_outlines
+
+
+def _check_svg_warnings(svg_content: str):
+    """Check for SVG features that may cause issues and print warnings."""
+    warnings = []
+
+    try:
+        root = ET.fromstring(svg_content)
+    except ET.ParseError:
+        return warnings
+
+    ns = "{http://www.w3.org/2000/svg}"
+
+    # Check for <style> blocks
+    for elem in root.iter(f"{ns}style"):
+        warnings.append("SVG contains <style> CSS blocks. Basic class/id selectors are supported, but complex CSS may cause missing geometry.")
+        break
+    for elem in root.iter("style"):
+        warnings.append("SVG contains <style> CSS blocks. Basic class/id selectors are supported, but complex CSS may cause missing geometry.")
+        break
+
+    # Check for <text> elements
+    for elem in root.iter(f"{ns}text"):
+        warnings.append("SVG contains <text> elements (not supported). Convert text to paths in your SVG editor first.")
+        break
+    for elem in root.iter("text"):
+        warnings.append("SVG contains <text> elements (not supported). Convert text to paths in your SVG editor first.")
+        break
+
+    # Check for gradient/pattern fills (url references)
+    url_pattern = re.compile(r'url\s*\(')
+    for elem in root.iter():
+        for attr in ("fill", "stroke"):
+            val = elem.get(attr, "")
+            if url_pattern.search(val):
+                warnings.append("SVG uses gradient/pattern fills (url references). These paths may produce empty output.")
+                break
+        style = elem.get("style", "")
+        if url_pattern.search(style):
+            warnings.append("SVG uses gradient/pattern fills in CSS styles. These paths may produce empty output.")
+            break
+
+    # Deduplicate
+    return list(dict.fromkeys(warnings))
 
 
 def main():
@@ -51,15 +100,27 @@ def main():
         help="Print statistics to stderr",
     )
     parser.add_argument(
+        "--no-strokes",
+        action="store_true",
+        help="Disable stroke-to-outline conversion (strokes are converted by default)",
+    )
+    # Keep --include-strokes for backward compat (now a no-op since it's default)
+    parser.add_argument(
         "--include-strokes",
         action="store_true",
-        help="Convert stroke-only paths to filled outlines",
+        help=argparse.SUPPRESS,  # Hidden: strokes are now included by default
     )
     parser.add_argument(
         "--stroke-width",
         type=float,
         default=None,
         help="Override stroke width for all stroked paths (default: use SVG attribute)",
+    )
+    parser.add_argument(
+        "--max-entities",
+        type=int,
+        default=None,
+        help="Maximum sketch entities. Paths are dropped to stay within limit.",
     )
 
     args = parser.parse_args()
@@ -72,15 +133,23 @@ def main():
 
     svg_content = input_path.read_text(encoding="utf-8")
 
+    # Check for potential issues
+    warnings = _check_svg_warnings(svg_content)
+    for w in warnings:
+        print(f"Warning: {w}", file=sys.stderr)
+
+    # Strokes are now included by default (unless --no-strokes)
+    include_strokes = not args.no_strokes
+
     # Process
     try:
-        viewbox, paths = parse_svg(svg_content, include_strokes=args.include_strokes)
+        viewbox, paths = parse_svg(svg_content, include_strokes=include_strokes)
     except Exception as e:
         print(f"Error parsing SVG: {e}", file=sys.stderr)
         sys.exit(1)
 
     # Convert strokes to outlines
-    if args.include_strokes:
+    if include_strokes:
         paths = stroke_to_outlines(paths, stroke_width_override=args.stroke_width)
 
     # Filter to filled paths
@@ -89,12 +158,34 @@ def main():
     if not filled_paths:
         print("Warning: No filled paths found in SVG.", file=sys.stderr)
 
+    # Max entities truncation
+    if args.max_entities is not None and filled_paths:
+        entity_count = estimate_entity_count(filled_paths)
+        if entity_count > args.max_entities:
+            # Drop paths from the end until under limit
+            truncated = []
+            running = 0
+            for path in filled_paths:
+                path_entities = sum(1 for cmd, _ in path.get("commands", []) if cmd in ("L", "C", "A"))
+                if running + path_entities <= args.max_entities:
+                    truncated.append(path)
+                    running += path_entities
+            dropped = len(filled_paths) - len(truncated)
+            print(f"Warning: Truncated from {entity_count} to {running} entities "
+                  f"({dropped} paths dropped to stay within --max-entities {args.max_entities}).",
+                  file=sys.stderr)
+            filled_paths = truncated
+
     # Encode
     svgtex = encode_svgtex(viewbox, filled_paths, args.precision)
 
-    # Stats
+    # Stats (always show entity count now)
+    entity_count = estimate_entity_count(filled_paths)
+    if entity_count > 2500:
+        print(f"Warning: {entity_count} sketch entities. May be slow or exceed Onshape limits with tiling.",
+              file=sys.stderr)
+
     if args.stats:
-        entity_count = estimate_entity_count(filled_paths)
         print(f"ViewBox: {viewbox}", file=sys.stderr)
         print(f"Paths: {len(filled_paths)}", file=sys.stderr)
         print(f"Sketch entities: {entity_count}", file=sys.stderr)
