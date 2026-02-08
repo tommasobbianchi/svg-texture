@@ -40,12 +40,23 @@ def _check_svg_warnings(svg_content: str):
         break
 
     # Check for <text> elements
+    has_text = False
     for elem in root.iter(f"{ns}text"):
-        warnings.append("SVG contains <text> elements (not supported). Convert text to paths in your SVG editor first.")
+        has_text = True
         break
-    for elem in root.iter("text"):
-        warnings.append("SVG contains <text> elements (not supported). Convert text to paths in your SVG editor first.")
-        break
+    if not has_text:
+        for elem in root.iter("text"):
+            has_text = True
+            break
+    if has_text:
+        try:
+            from .text_to_path import HAS_FONTTOOLS
+            if HAS_FONTTOOLS:
+                warnings.append("SVG contains <text> elements (will be converted to paths using system font).")
+            else:
+                warnings.append("SVG contains <text> elements. Install fonttools for text-to-path conversion: pip install fonttools")
+        except ImportError:
+            warnings.append("SVG contains <text> elements. Install fonttools for text-to-path conversion: pip install fonttools")
 
     # Check for gradient/pattern fills (url references)
     url_pattern = re.compile(r'url\s*\(')
@@ -122,6 +133,17 @@ def main():
         default=None,
         help="Maximum sketch entities. Paths are dropped to stay within limit.",
     )
+    parser.add_argument(
+        "--font",
+        type=str,
+        default=None,
+        help="Path to TTF/OTF font file for text-to-path conversion",
+    )
+    parser.add_argument(
+        "--no-text",
+        action="store_true",
+        help="Skip text-to-path conversion (text elements will be ignored)",
+    )
 
     args = parser.parse_args()
 
@@ -141,9 +163,13 @@ def main():
     # Strokes are now included by default (unless --no-strokes)
     include_strokes = not args.no_strokes
 
+    # Text conversion
+    convert_text = not args.no_text
+
     # Process
     try:
-        viewbox, paths = parse_svg(svg_content, include_strokes=include_strokes)
+        viewbox, paths = parse_svg(svg_content, include_strokes=include_strokes,
+                                    font_path=args.font, convert_text=convert_text)
     except Exception as e:
         print(f"Error parsing SVG: {e}", file=sys.stderr)
         sys.exit(1)

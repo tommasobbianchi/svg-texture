@@ -214,12 +214,16 @@ def walk_elements(
 def parse_svg(
     svg_content: str,
     include_strokes: bool = False,
+    font_path: str = None,
+    convert_text: bool = True,
 ) -> Tuple[Tuple[float, float, float, float], List[dict]]:
     """Parse SVG content string and extract path data.
 
     Args:
         svg_content: SVG file content as string.
         include_strokes: If True, also extract stroke-only paths.
+        font_path: Path to TTF/OTF font file for text-to-path conversion.
+        convert_text: If True, convert <text> elements to paths.
 
     Returns:
         (viewbox, paths) where:
@@ -230,6 +234,14 @@ def parse_svg(
 
     # Resolve <use> elements first
     resolve_uses(root)
+
+    # Convert <text> to <path> if fontTools is available
+    if convert_text:
+        try:
+            from .text_to_path import convert_text_to_paths
+            convert_text_to_paths(root, font_path=font_path)
+        except ImportError:
+            pass
 
     viewbox = parse_viewbox(root)
     paths = walk_elements(root, include_strokes=include_strokes)
