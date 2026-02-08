@@ -791,8 +791,8 @@ export const svgTexture = defineFeature(function(context is Context, id is Id, d
         definition.targetFace is Query;
 
         // -- SVG data input --
-        annotation { "Name" : "SVGTEX file" }
-        definition.svgtexFile is TextData;
+        annotation { "Name" : "SVG Pattern file" }
+        definition.svgPatternFile is TextData;
 
         // -- Dimensions --
         annotation { "Group Name" : "Pattern Size", "Collapsed By Default" : false }
@@ -863,14 +863,14 @@ export const svgTexture = defineFeature(function(context is Context, id is Id, d
         }
 
         // Parse SVGTEX data
-        if (definition.svgtexFile == undefined || definition.svgtexFile.textData == undefined ||
-            length(definition.svgtexFile.textData) == 0)
+        if (definition.svgPatternFile == undefined || definition.svgPatternFile.textData == undefined ||
+            length(definition.svgPatternFile.textData) == 0)
         {
-            reportFeatureError(context, id, "Please select a SVGTEX file.");
+            reportFeatureError(context, id, "Please select an SVG pattern file (.txt converted from SVG).");
             return;
         }
 
-        var svgData = parseSvgTex(definition.svgtexFile.textData);
+        var svgData = parseSvgTex(definition.svgPatternFile.textData);
 
         if (size(svgData.paths) == 0)
         {
