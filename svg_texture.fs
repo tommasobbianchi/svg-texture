@@ -23,6 +23,16 @@ export enum MappingMode
     CYLINDRICAL
 }
 
+export enum TilingMode
+{
+    annotation { "Name" : "Single" }
+    SINGLE,
+    annotation { "Name" : "Grid" }
+    GRID,
+    annotation { "Name" : "Fill face" }
+    FILL
+}
+
 export const TEXTURE_DEPTH_BOUNDS =
 {
     (meter)      : [1e-5, 0.0005, 0.5],
@@ -2297,8 +2307,7 @@ function detectAndParse(content is string) returns map
 function createTextureSketch(context is Context, id is Id, plane is Plane,
     svgData is map, patternWidth is ValueWithUnits, patternHeight is ValueWithUnits,
     offsetX is ValueWithUnits, offsetY is ValueWithUnits, rotation is ValueWithUnits,
-    tilingEnabled is boolean, tilesX is number, tilesY is number,
-    spacingX is ValueWithUnits, spacingY is ValueWithUnits, offsetAlternate is boolean)
+    tileParams is map)
 {
     var sketchId = id + "textureSketch";
     var sketch = newSketchOnPlane(context, sketchId, { "sketchPlane" : plane });
@@ -2308,28 +2317,30 @@ function createTextureSketch(context is Context, id is Id, plane is Plane,
     var scaleY = patternHeight / (viewBox.height * millimeter);
 
     var entityIdx = 0;
+    var tilesX = tileParams.tilesX;
+    var tilesY = tileParams.tilesY;
+    var spacingX = tileParams.spacingX;
+    var spacingY = tileParams.spacingY;
+    var stagger = tileParams.stagger;
+    var mirrorX = tileParams.mirrorX;
+    var mirrorY = tileParams.mirrorY;
+    var baseOffsetX = tileParams.baseOffsetX + offsetX;
+    var baseOffsetY = tileParams.baseOffsetY + offsetY;
 
-    if (tilingEnabled)
+    for (var tx = 0; tx < tilesX; tx += 1)
     {
-        for (var tx = 0; tx < tilesX; tx += 1)
+        for (var ty = 0; ty < tilesY; ty += 1)
         {
-            for (var ty = 0; ty < tilesY; ty += 1)
-            {
-                var tileOffsetX = tx * (patternWidth + spacingX) + offsetX;
-                var tileOffsetY = ty * (patternHeight + spacingY) + offsetY;
-                if (offsetAlternate && (ty % 2 == 1))
-                    tileOffsetX += (patternWidth + spacingX) / 2;
-                entityIdx = drawPaths(sketch, sketchId, svgData.paths,
-                    viewBox, scaleX, scaleY,
-                    tileOffsetX, tileOffsetY, rotation, entityIdx);
-            }
+            var tileOffsetX = tx * (patternWidth + spacingX) + baseOffsetX;
+            var tileOffsetY = ty * (patternHeight + spacingY) + baseOffsetY;
+            if (stagger && (ty % 2 == 1))
+                tileOffsetX += (patternWidth + spacingX) / 2;
+            var doFlipX = mirrorX && (tx % 2 == 1);
+            var doFlipY = mirrorY && (ty % 2 == 1);
+            entityIdx = drawPaths(sketch, sketchId, svgData.paths,
+                viewBox, scaleX, scaleY,
+                tileOffsetX, tileOffsetY, rotation, entityIdx, doFlipX, doFlipY);
         }
-    }
-    else
-    {
-        entityIdx = drawPaths(sketch, sketchId, svgData.paths,
-            viewBox, scaleX, scaleY,
-            offsetX, offsetY, rotation, entityIdx);
     }
 
     skSolve(sketch);
@@ -2338,11 +2349,19 @@ function createTextureSketch(context is Context, id is Id, plane is Plane,
 function drawPaths(sketch is Sketch, sketchId is Id, paths is array,
     viewBox is map, scaleX is number, scaleY is number,
     offsetX is ValueWithUnits, offsetY is ValueWithUnits,
-    rotation is ValueWithUnits, startIdx is number) returns number
+    rotation is ValueWithUnits, startIdx is number,
+    flipX is boolean, flipY is boolean) returns number
 {
     var entityIdx = startIdx;
     var cosR = cos(rotation);
     var sinR = sin(rotation);
+
+    // Helper: transform raw SVG coordinate to local sketch coordinate with optional flip
+    // flipX mirrors around viewBox center X, flipY mirrors around viewBox center Y
+    var vbMinX = viewBox.minX;
+    var vbMinY = viewBox.minY;
+    var vbW = viewBox.width;
+    var vbH = viewBox.height;
 
     for (var p = 0; p < size(paths); p += 1)
     {
@@ -2361,15 +2380,19 @@ function drawPaths(sketch is Sketch, sketchId is Id, paths is array,
 
             if (cmd == "M")
             {
-                curX = (params[0] - viewBox.minX) * scaleX * millimeter;
-                curY = -(params[1] - viewBox.minY) * scaleY * millimeter;
+                var rawX = flipX ? (vbMinX + vbW - (params[0] - vbMinX)) : params[0];
+                var rawY = flipY ? (vbMinY + vbH - (params[1] - vbMinY)) : params[1];
+                curX = (rawX - vbMinX) * scaleX * millimeter;
+                curY = -(rawY - vbMinY) * scaleY * millimeter;
                 subpathStartX = curX;
                 subpathStartY = curY;
             }
             else if (cmd == "L")
             {
-                var x = (params[0] - viewBox.minX) * scaleX * millimeter;
-                var y = -(params[1] - viewBox.minY) * scaleY * millimeter;
+                var rawX = flipX ? (vbMinX + vbW - (params[0] - vbMinX)) : params[0];
+                var rawY = flipY ? (vbMinY + vbH - (params[1] - vbMinY)) : params[1];
+                var x = (rawX - vbMinX) * scaleX * millimeter;
+                var y = -(rawY - vbMinY) * scaleY * millimeter;
                 var p1 = rotOff(curX, curY, cosR, sinR, offsetX, offsetY);
                 var p2 = rotOff(x, y, cosR, sinR, offsetX, offsetY);
                 skLineSegment(sketch, "line_" ~ toString(entityIdx), {
@@ -2381,12 +2404,18 @@ function drawPaths(sketch is Sketch, sketchId is Id, paths is array,
             }
             else if (cmd == "C")
             {
-                var x1 = (params[0] - viewBox.minX) * scaleX * millimeter;
-                var y1 = -(params[1] - viewBox.minY) * scaleY * millimeter;
-                var x2 = (params[2] - viewBox.minX) * scaleX * millimeter;
-                var y2 = -(params[3] - viewBox.minY) * scaleY * millimeter;
-                var x = (params[4] - viewBox.minX) * scaleX * millimeter;
-                var y = -(params[5] - viewBox.minY) * scaleY * millimeter;
+                var rx1 = flipX ? (vbMinX + vbW - (params[0] - vbMinX)) : params[0];
+                var ry1 = flipY ? (vbMinY + vbH - (params[1] - vbMinY)) : params[1];
+                var rx2 = flipX ? (vbMinX + vbW - (params[2] - vbMinX)) : params[2];
+                var ry2 = flipY ? (vbMinY + vbH - (params[3] - vbMinY)) : params[3];
+                var rxe = flipX ? (vbMinX + vbW - (params[4] - vbMinX)) : params[4];
+                var rye = flipY ? (vbMinY + vbH - (params[5] - vbMinY)) : params[5];
+                var x1 = (rx1 - vbMinX) * scaleX * millimeter;
+                var y1 = -(ry1 - vbMinY) * scaleY * millimeter;
+                var x2 = (rx2 - vbMinX) * scaleX * millimeter;
+                var y2 = -(ry2 - vbMinY) * scaleY * millimeter;
+                var x = (rxe - vbMinX) * scaleX * millimeter;
+                var y = -(rye - vbMinY) * scaleY * millimeter;
                 var ps = rotOff(curX, curY, cosR, sinR, offsetX, offsetY);
                 var pc1 = rotOff(x1, y1, cosR, sinR, offsetX, offsetY);
                 var pc2 = rotOff(x2, y2, cosR, sinR, offsetX, offsetY);
@@ -2399,11 +2428,24 @@ function drawPaths(sketch is Sketch, sketchId is Id, paths is array,
             }
             else if (cmd == "A")
             {
-                var cx2 = (params[0] - viewBox.minX) * scaleX * millimeter;
-                var cy2 = -(params[1] - viewBox.minY) * scaleY * millimeter;
+                var rcx = flipX ? (vbMinX + vbW - (params[0] - vbMinX)) : params[0];
+                var rcy = flipY ? (vbMinY + vbH - (params[1] - vbMinY)) : params[1];
+                var cx2 = (rcx - vbMinX) * scaleX * millimeter;
+                var cy2 = -(rcy - vbMinY) * scaleY * millimeter;
                 var r = params[2] * ((scaleX + scaleY) / 2) * millimeter;
                 var startDeg = -params[3];
                 var sweepDeg = -params[4];
+                // Mirror flips arc direction
+                if (flipX)
+                {
+                    startDeg = 180 - startDeg;
+                    sweepDeg = -sweepDeg;
+                }
+                if (flipY)
+                {
+                    startDeg = -startDeg;
+                    sweepDeg = -sweepDeg;
+                }
                 var startRad = startDeg * PI / 180;
                 var midRad = startRad + (sweepDeg * PI / 180) / 2;
                 var endRad = startRad + sweepDeg * PI / 180;
@@ -2483,22 +2525,142 @@ function getCylinderInfo(context is Context, face is Query) returns map
 }
 
 // ============================================================================
+// Section 16b: Tiling Parameter Resolution
+// ============================================================================
+
+function resolveTilingParams(definition is map, fillResult) returns map
+{
+    var result = {
+        "tilesX" : 1,
+        "tilesY" : 1,
+        "spacingX" : 0 * millimeter,
+        "spacingY" : 0 * millimeter,
+        "stagger" : false,
+        "mirrorX" : false,
+        "mirrorY" : false,
+        "baseOffsetX" : 0 * millimeter,
+        "baseOffsetY" : 0 * millimeter
+    };
+
+    if (definition.tilingMode == TilingMode.GRID)
+    {
+        result.tilesX = definition.tilesX;
+        result.tilesY = definition.tilesY;
+        result.spacingX = definition.spacingX;
+        result.spacingY = definition.spacingY;
+        result.stagger = definition.offsetAlternate;
+        result.mirrorX = definition.mirrorX;
+        result.mirrorY = definition.mirrorY;
+    }
+    else if (definition.tilingMode == TilingMode.FILL && fillResult != undefined)
+    {
+        result.tilesX = fillResult.tilesX;
+        result.tilesY = fillResult.tilesY;
+        result.spacingX = fillResult.spacingX;
+        result.spacingY = fillResult.spacingY;
+        result.stagger = definition.fillStagger;
+        result.mirrorX = definition.mirrorX;
+        result.mirrorY = definition.mirrorY;
+        result.baseOffsetX = fillResult.startOffsetX;
+        result.baseOffsetY = fillResult.startOffsetY;
+    }
+    // SINGLE: all defaults (1×1, no spacing, no mirror)
+
+    return result;
+}
+
+function calculateFillTiles(context is Context, face is Query, mappingMode is MappingMode,
+    patternWidth is ValueWithUnits, patternHeight is ValueWithUnits,
+    spacing is ValueWithUnits, margin is ValueWithUnits) returns map
+{
+    // Get face bounding box
+    var box3d = evBox3d(context, { "topology" : face });
+    var faceWidth = box3d.maxCorner[0] - box3d.minCorner[0];
+    var faceHeight = box3d.maxCorner[1] - box3d.minCorner[1];
+
+    // For planar faces, use face plane to get accurate 2D extents
+    try silent
+    {
+        var facePlane = evPlane(context, { "face" : face });
+        var diag = box3d.maxCorner - box3d.minCorner;
+        // Project diagonal onto face plane X and Y axes
+        var projX = dot(diag, facePlane.x);
+        var projY = dot(diag, facePlane.y);
+        // Manual abs (safer than abs() for ValueWithUnits)
+        if (projX < 0 * meter)
+            projX = -projX;
+        if (projY < 0 * meter)
+            projY = -projY;
+        if (projX > 0 * meter)
+            faceWidth = projX;
+        if (projY > 0 * meter)
+            faceHeight = projY;
+    }
+
+    // Ensure face dimensions are positive
+    if (faceWidth <= 0 * meter)
+        faceWidth = patternWidth;
+    if (faceHeight <= 0 * meter)
+        faceHeight = patternHeight;
+
+    // Calculate how many complete tiles fit
+    var availableW = faceWidth - 2 * margin;
+    var availableH = faceHeight - 2 * margin;
+
+    if (availableW < patternWidth)
+        availableW = patternWidth;
+    if (availableH < patternHeight)
+        availableH = patternHeight;
+
+    var stepW = patternWidth + spacing;
+    var stepH = patternHeight + spacing;
+
+    // Ensure step sizes are positive to avoid division issues
+    if (stepW <= 0 * meter)
+        stepW = patternWidth;
+    if (stepH <= 0 * meter)
+        stepH = patternHeight;
+
+    var nX = availableW / stepW;
+    var nY = availableH / stepH;
+    var tilesX = max(1, floor(nX));
+    var tilesY = max(1, floor(nY));
+
+    // Adjust: check if one more tile fits (floor may be conservative)
+    if ((tilesX + 1) * patternWidth + tilesX * spacing <= availableW)
+        tilesX += 1;
+    if ((tilesY + 1) * patternHeight + tilesY * spacing <= availableH)
+        tilesY += 1;
+
+    // Center the grid on the face
+    var usedW = tilesX * patternWidth + max(0, tilesX - 1) * spacing;
+    var usedH = tilesY * patternHeight + max(0, tilesY - 1) * spacing;
+    var startOffsetX = (faceWidth - usedW) / 2;
+    var startOffsetY = (faceHeight - usedH) / 2;
+
+    return {
+        "tilesX" : tilesX,
+        "tilesY" : tilesY,
+        "spacingX" : spacing,
+        "spacingY" : spacing,
+        "startOffsetX" : startOffsetX,
+        "startOffsetY" : startOffsetY
+    };
+}
+
+// ============================================================================
 // Section 17: Extrusion & Boolean
 // ============================================================================
 
 function handlePlanarFace(context is Context, id is Id, face is Query,
-    svgData is map, definition is map)
+    svgData is map, definition is map, fillResult)
 {
     var facePlane = getFacePlane(context, face);
+    var tileParams = resolveTilingParams(definition, fillResult);
     createTextureSketch(context, id, facePlane, svgData,
         definition.patternWidth, definition.patternHeight,
         definition.offsetX, definition.offsetY, definition.rotation,
-        definition.tilingEnabled,
-        definition.tilingEnabled ? definition.tilesX : 1,
-        definition.tilingEnabled ? definition.tilesY : 1,
-        definition.tilingEnabled ? definition.spacingX : 0 * millimeter,
-        definition.tilingEnabled ? definition.spacingY : 0 * millimeter,
-        definition.tilingEnabled ? definition.offsetAlternate : false);
+        tileParams);
 
     var sketchId = id + "textureSketch";
     var sketchRegions = qSketchRegion(sketchId);
@@ -2533,7 +2695,7 @@ function handlePlanarFace(context is Context, id is Id, face is Query,
 }
 
 function handleCylindricalFace(context is Context, id is Id, face is Query,
-    svgData is map, definition is map)
+    svgData is map, definition is map, fillResult)
 {
     var cylInfo = getCylinderInfo(context, face);
     var tangentPlane = evFaceTangentPlane(context, {
@@ -2541,15 +2703,11 @@ function handleCylindricalFace(context is Context, id is Id, face is Query,
         "parameter" : vector(0.5, 0.5)
     });
 
+    var tileParams = resolveTilingParams(definition, fillResult);
     createTextureSketch(context, id, tangentPlane, svgData,
         definition.patternWidth, definition.patternHeight,
         definition.offsetX, definition.offsetY, definition.rotation,
-        definition.tilingEnabled,
-        definition.tilingEnabled ? definition.tilesX : 1,
-        definition.tilingEnabled ? definition.tilesY : 1,
-        definition.tilingEnabled ? definition.spacingX : 0 * millimeter,
-        definition.tilingEnabled ? definition.spacingY : 0 * millimeter,
-        definition.tilingEnabled ? definition.offsetAlternate : false);
+        tileParams);
 
     var sketchId = id + "textureSketch";
     var sketchRegions = qSketchRegion(sketchId);
@@ -2686,14 +2844,14 @@ export const svgTexture = defineFeature(function(context is Context, id is Id, d
             isAngle(definition.rotation, ANGLE_360_ZERO_DEFAULT_BOUNDS);
         }
 
-        annotation { "Name" : "Tiling" }
-        definition.tilingEnabled is boolean;
+        annotation { "Name" : "Tiling",
+                     "UIHint" : UIHint.HORIZONTAL_ENUM }
+        definition.tilingMode is TilingMode;
 
-        if (definition.tilingEnabled)
+        if (definition.tilingMode == TilingMode.GRID)
         {
-            annotation { "Group Name" : "Tiling",
-                         "Collapsed By Default" : false,
-                         "Driving Parameter" : "tilingEnabled" }
+            annotation { "Group Name" : "Grid Tiling",
+                         "Collapsed By Default" : false }
             {
                 annotation { "Name" : "Columns" }
                 isInteger(definition.tilesX, TILE_COUNT_BOUNDS);
@@ -2710,6 +2868,38 @@ export const svgTexture = defineFeature(function(context is Context, id is Id, d
                 annotation { "Name" : "Stagger rows",
                              "Default" : false }
                 definition.offsetAlternate is boolean;
+            }
+        }
+
+        if (definition.tilingMode == TilingMode.FILL)
+        {
+            annotation { "Group Name" : "Fill Settings",
+                         "Collapsed By Default" : false }
+            {
+                annotation { "Name" : "Spacing" }
+                isLength(definition.fillSpacing, NONNEGATIVE_ZERO_DEFAULT_LENGTH_BOUNDS);
+
+                annotation { "Name" : "Margin" }
+                isLength(definition.fillMargin, NONNEGATIVE_ZERO_DEFAULT_LENGTH_BOUNDS);
+
+                annotation { "Name" : "Stagger rows",
+                             "Default" : false }
+                definition.fillStagger is boolean;
+            }
+        }
+
+        if (definition.tilingMode != TilingMode.SINGLE)
+        {
+            annotation { "Group Name" : "Mirror",
+                         "Collapsed By Default" : true }
+            {
+                annotation { "Name" : "Mirror columns",
+                             "Default" : false }
+                definition.mirrorX is boolean;
+
+                annotation { "Name" : "Mirror rows",
+                             "Default" : false }
+                definition.mirrorY is boolean;
             }
         }
 
@@ -2760,11 +2950,41 @@ export const svgTexture = defineFeature(function(context is Context, id is Id, d
             return;
         }
 
+        // Detect mapping mode
+        var mappingMode = definition.mappingMode;
+        if (mappingMode == MappingMode.AUTO)
+            mappingMode = detectSurfaceType(context, definition.targetFace);
+
+        // Calculate fill tiles if needed (must happen before entity count check)
+        var fillResult = undefined;
+        if (definition.tilingMode == TilingMode.FILL)
+        {
+            try silent
+            {
+                fillResult = calculateFillTiles(context, definition.targetFace, mappingMode,
+                    definition.patternWidth, definition.patternHeight,
+                    definition.fillSpacing, definition.fillMargin);
+            }
+            if (fillResult == undefined)
+            {
+                reportFeatureWarning(context, id, "Could not auto-calculate tile count. Falling back to single tile.");
+            }
+        }
+
         // Entity count management
         var entityCount = countEntities(svgData.paths);
         var tileMultiplier = 1;
-        if (definition.tilingEnabled)
+        var tilingLabel = "";
+        if (definition.tilingMode == TilingMode.GRID)
+        {
             tileMultiplier = definition.tilesX * definition.tilesY;
+            tilingLabel = " (" ~ toString(definition.tilesX) ~ "\u00d7" ~ toString(definition.tilesY) ~ " grid)";
+        }
+        else if (definition.tilingMode == TilingMode.FILL && fillResult != undefined)
+        {
+            tileMultiplier = fillResult.tilesX * fillResult.tilesY;
+            tilingLabel = " (" ~ toString(fillResult.tilesX) ~ "\u00d7" ~ toString(fillResult.tilesY) ~ " auto-fill)";
+        }
         var totalEntities = entityCount * tileMultiplier;
 
         if (totalEntities > definition.maxEntities)
@@ -2785,13 +3005,8 @@ export const svgTexture = defineFeature(function(context is Context, id is Id, d
         else
         {
             reportFeatureInfo(context, id, "SVG parsed: " ~ toString(entityCount) ~ " entities per tile, " ~
-                toString(totalEntities) ~ " total.");
+                toString(totalEntities) ~ " total." ~ tilingLabel);
         }
-
-        // Detect mapping mode
-        var mappingMode = definition.mappingMode;
-        if (mappingMode == MappingMode.AUTO)
-            mappingMode = detectSurfaceType(context, definition.targetFace);
 
         // Dispatch
         if (mappingMode == MappingMode.CYLINDRICAL)
@@ -2800,13 +3015,13 @@ export const svgTexture = defineFeature(function(context is Context, id is Id, d
             if (actualType != MappingMode.CYLINDRICAL)
             {
                 reportFeatureWarning(context, id, "Cylindrical mapping requires a cylindrical face. Falling back to planar mapping.");
-                handlePlanarFace(context, id, definition.targetFace, svgData, definition);
+                handlePlanarFace(context, id, definition.targetFace, svgData, definition, fillResult);
             }
             else
             {
-                handleCylindricalFace(context, id, definition.targetFace, svgData, definition);
+                handleCylindricalFace(context, id, definition.targetFace, svgData, definition, fillResult);
             }
         }
         else
-            handlePlanarFace(context, id, definition.targetFace, svgData, definition);
+            handlePlanarFace(context, id, definition.targetFace, svgData, definition, fillResult);
     });
