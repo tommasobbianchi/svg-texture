@@ -2795,7 +2795,18 @@ export const svgTexture = defineFeature(function(context is Context, id is Id, d
 
         // Dispatch
         if (mappingMode == MappingMode.CYLINDRICAL)
-            handleCylindricalFace(context, id, definition.targetFace, svgData, definition);
+        {
+            var actualType = detectSurfaceType(context, definition.targetFace);
+            if (actualType != MappingMode.CYLINDRICAL)
+            {
+                reportFeatureWarning(context, id, "Cylindrical mapping requires a cylindrical face. Falling back to planar mapping.");
+                handlePlanarFace(context, id, definition.targetFace, svgData, definition);
+            }
+            else
+            {
+                handleCylindricalFace(context, id, definition.targetFace, svgData, definition);
+            }
+        }
         else
             handlePlanarFace(context, id, definition.targetFace, svgData, definition);
     });
