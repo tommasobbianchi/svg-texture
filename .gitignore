@@ -5,3 +5,6 @@ __pycache__/
 *.jpeg
 *.png
 .playwright-mcp/
+.claude.json*
+.claude/
+.onshape_credentials
