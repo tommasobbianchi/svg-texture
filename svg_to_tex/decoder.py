@@ -110,8 +110,10 @@ def decode_svgtex(text: str) -> Tuple[Tuple[float, float, float, float], List[di
 
     paths = []
     for seg in segments[1:]:
-        if seg:  # skip empty segments
-            paths.append(decode_path(seg))
+        seg = seg.strip()
+        if not seg or seg.startswith("#"):  # skip empty segments and comments
+            continue
+        paths.append(decode_path(seg))
 
     return viewbox, paths
 
