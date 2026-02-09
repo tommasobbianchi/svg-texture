@@ -186,8 +186,13 @@ def arc_to_beziers(
     return result
 
 
-def is_circular(rx: float, ry: float, phi_deg: float, tolerance: float = 0.01) -> bool:
-    """Check if an elliptical arc is effectively circular."""
+def is_circular(rx: float, ry: float, phi_deg: float, tolerance: float = 0.001) -> bool:
+    """Check if an elliptical arc is effectively circular (within 0.1%).
+
+    Tighter tolerance (0.1% vs old 1%) ensures the radius averaging in
+    center-param conversion stays well within CAD/3D-print tolerance.
+    Truly elliptical arcs are converted to cubic Béziers instead.
+    """
     return abs(rx - ry) / max(rx, ry, 1e-10) < tolerance
 
 

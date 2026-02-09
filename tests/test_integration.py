@@ -164,6 +164,102 @@ class TestEdgeCases:
         assert "V0,0,200,150" in result
 
 
+class TestCSSStyleBlocks:
+    def test_class_selector_fill(self):
+        """CSS class selector sets fill on element."""
+        svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <style>.filled { fill: red; }</style>
+            <rect class="filled" x="10" y="10" width="80" height="80"/>
+        </svg>'''
+        result = process_svg(svg)
+        parts = [l for l in result.strip().split("|") if not l.startswith("#") and not l.startswith("V")]
+        assert len(parts) == 1
+
+    def test_class_selector_fill_none(self):
+        """CSS class setting fill:none removes element from output."""
+        svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <style>.hidden { fill: none; }</style>
+            <rect class="hidden" x="10" y="10" width="80" height="80"/>
+        </svg>'''
+        result = process_svg(svg)
+        parts = [l for l in result.strip().split("|") if not l.startswith("#") and not l.startswith("V")]
+        assert len(parts) == 0
+
+    def test_id_selector(self):
+        """CSS #id selector applies styles."""
+        svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <style>#mybox { fill: blue; }</style>
+            <rect id="mybox" x="10" y="10" width="80" height="80" fill="none"/>
+        </svg>'''
+        result = process_svg(svg)
+        parts = [l for l in result.strip().split("|") if not l.startswith("#") and not l.startswith("V")]
+        # id selector should override the presentation attribute fill="none"
+        assert len(parts) == 1
+
+    def test_css_overrides_presentation_attr(self):
+        """CSS should override presentation attributes."""
+        svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <style>.nofill { fill: none; }</style>
+            <rect class="nofill" x="10" y="10" width="80" height="80" fill="red"/>
+        </svg>'''
+        result = process_svg(svg)
+        parts = [l for l in result.strip().split("|") if not l.startswith("#") and not l.startswith("V")]
+        # CSS fill:none should override fill="red"
+        assert len(parts) == 0
+
+    def test_inline_style_overrides_css(self):
+        """Inline style should override CSS rules."""
+        svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <style>.nofill { fill: none; }</style>
+            <rect class="nofill" x="10" y="10" width="80" height="80" style="fill:blue"/>
+        </svg>'''
+        result = process_svg(svg)
+        parts = [l for l in result.strip().split("|") if not l.startswith("#") and not l.startswith("V")]
+        # inline style fill:blue should override CSS fill:none
+        assert len(parts) == 1
+
+    def test_css_fill_rule_evenodd(self):
+        """CSS can set fill-rule."""
+        svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <style>.eo { fill-rule: evenodd; fill: black; }</style>
+            <path class="eo" d="M 0,0 L 100,0 L 100,100 L 0,100 Z"/>
+        </svg>'''
+        result = process_svg(svg)
+        parts = [l for l in result.strip().split("|") if not l.startswith("#") and not l.startswith("V")]
+        assert len(parts) == 1
+        assert parts[0].startswith("E")
+
+    def test_multiple_classes(self):
+        """Element with multiple CSS classes gets combined rules."""
+        svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <style>.colored { fill: red; } .rule { fill-rule: evenodd; }</style>
+            <path class="colored rule" d="M 0,0 L 100,0 L 100,100 L 0,100 Z"/>
+        </svg>'''
+        result = process_svg(svg)
+        parts = [l for l in result.strip().split("|") if not l.startswith("#") and not l.startswith("V")]
+        assert len(parts) == 1
+        assert parts[0].startswith("E")
+
+    def test_no_style_block(self):
+        """SVG without <style> block works normally."""
+        svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <rect x="10" y="10" width="80" height="80" fill="black"/>
+        </svg>'''
+        result = process_svg(svg)
+        parts = [l for l in result.strip().split("|") if not l.startswith("#") and not l.startswith("V")]
+        assert len(parts) == 1
+
+    def test_css_comment_ignored(self):
+        """CSS comments are properly stripped."""
+        svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <style>/* this is a comment */ .box { fill: red; }</style>
+            <rect class="box" x="10" y="10" width="80" height="80"/>
+        </svg>'''
+        result = process_svg(svg)
+        parts = [l for l in result.strip().split("|") if not l.startswith("#") and not l.startswith("V")]
+        assert len(parts) == 1
+
+
 class TestStrokeIntegration:
     def test_stroke_only_rect(self):
         """Stroke-only rect produces outline with include_strokes=True."""

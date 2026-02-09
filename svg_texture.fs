@@ -1,6 +1,33 @@
 FeatureScript 2878;
 import(path : "onshape/std/common.fs", version : "2878.0");
 
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  SVG Texture — Table of Contents                                       ║
+// ╠══════════════════════════════════════════════════════════════════════════╣
+// ║  Section  1:  Enums & Constants                          (line ~20)    ║
+// ║  Section  2:  String / Math Utilities                    (line ~70)    ║
+// ║  Section  3:  XML Tag Scanner                            (line ~240)   ║
+// ║  Section  4:  Tag & Attribute Parser                     (line ~325)   ║
+// ║  Section  5:  CSS Style Block Parser                     (line ~440)   ║
+// ║  Section  6:  SVG Path D Tokenizer & Parser              (line ~610)   ║
+// ║  Section  7:  Arc Converter (endpoint → center)          (line ~705)   ║
+// ║  Section  8:  Path Normalizer (rel → abs, curves)        (line ~860)   ║
+// ║  Section  9:  Transform Parser (matrix, translate, etc)  (line ~990)   ║
+// ║  Section 10:  Shape Converters (rect, circle → path d)   (line ~1150)  ║
+// ║  Section 10b: Hershey Simplex Font (text → paths)        (line ~1250)  ║
+// ║  Section 11:  SVG Document Parser (main walker)          (line ~1400)  ║
+// ║  Section 12:  Stroke Outliner (stroke → filled outline)  (line ~1825)  ║
+// ║  Section 13:  Auto-close, Filter, Entity Count           (line ~2100)  ║
+// ║  Section 14:  SVGTEX Parser (pipe-delimited format)      (line ~2210)  ║
+// ║  Section 15:  Sketch Generator (paths → Onshape sketch)  (line ~2305)  ║
+// ║  Section 16:  Surface Mapper (planar / cylindrical)      (line ~2505)  ║
+// ║  Section 17:  Fill Tiling Calculator                     (line ~2780)  ║
+// ║  Section 18:  Feature UI & Main Entry Point              (line ~2990)  ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
+//
+// Note: FeatureScript requires a single file per custom feature.
+// Search for "Section N:" to jump between sections.
+
 // ============================================================================
 // Section 1: Enums & Constants
 // ============================================================================
@@ -60,7 +87,7 @@ export const TILE_COUNT_BOUNDS =
 
 export const MAX_ENTITIES_BOUNDS =
 {
-    (unitless) : [10, 2500, 100000]
+    (unitless) : [10, 2500, 25000]  // Lowered from 100K; Onshape gets slow above ~10K entities
 } as IntegerBoundSpec;
 
 const MY_PI = 3.14159265358979323846;
@@ -539,7 +566,9 @@ function trimStr(s is string) returns string
     return charsToString(ch, a, b);
 }
 
-// Resolve CSS class/id styles for an element
+// Resolve CSS class/id styles for an element.
+// SVG priority: inline style > CSS rules > presentation attributes.
+// CSS rules OVERRIDE presentation attributes (inline style wins later in parseInlineStyle).
 function applyCssRules(attrs is map, cssRules is map) returns map
 {
     var merged = attrs;
@@ -558,13 +587,12 @@ function applyCssRules(attrs is map, cssRules is map) returns map
                 var props = cssRules[ruleKey];
                 for (var key, val in props)
                 {
-                    if (merged[key] == undefined) // element attrs take precedence
-                        merged[key] = val;
+                    merged[key] = val; // CSS overrides presentation attrs
                 }
             }
         }
     }
-    // Look up by id
+    // Look up by id (higher specificity, applied after class)
     if (attrs["id"] != undefined)
     {
         var ruleKey = "#" ~ attrs["id"];
@@ -573,15 +601,15 @@ function applyCssRules(attrs is map, cssRules is map) returns map
             var props = cssRules[ruleKey];
             for (var key, val in props)
             {
-                if (merged[key] == undefined)
-                    merged[key] = val;
+                merged[key] = val; // CSS overrides presentation attrs
             }
         }
     }
     return merged;
 }
 
-// Parse inline style="..." into individual attributes
+// Parse inline style="..." into individual attributes.
+// Inline styles have HIGHEST priority — they override both CSS and presentation attrs.
 function parseInlineStyle(attrs is map) returns map
 {
     if (attrs["style"] == undefined)
@@ -595,8 +623,8 @@ function parseInlineStyle(attrs is map) returns map
         {
             var pName = trimStr(pv[0]);
             var pVal = trimStr(pv[1]);
-            if (pName != "" && merged[pName] == undefined) // explicit attrs win
-                merged[pName] = pVal;
+            if (pName != "")
+                merged[pName] = pVal; // inline style wins over everything
         }
     }
     return merged;
@@ -959,15 +987,22 @@ function normalizePath(raw is array) returns array
             var x = p[5]+o; var y = p[6]+oy;
             if (arx == 0 || ary == 0)
             {
+                // Degenerate arc (zero radius) → straight line
                 res = append(res, { "cmd" : "L", "params" : [x, y] });
             }
-            else if (abs(arx - ary) < 0.01 * max(arx, ary))
+            else if (abs(arx - ary) < 0.001 * max(arx, ary))
             {
+                // Nearly circular (rx ≈ ry within 0.1%): use native arc command.
+                // endpointToCenter averages rx/ry into a single radius r.
+                // Max error from averaging is ≤0.05% of radius — well within
+                // CAD/3D-print tolerance. Truly elliptical arcs go to beziers below.
                 var ac = endpointToCenter(cx, cy, arx, ary, rot, fa, fs, x, y);
                 res = append(res, { "cmd" : "A", "params" : [ac.cx, ac.cy, ac.r, ac.startDeg, ac.sweepDeg] });
             }
             else
             {
+                // Elliptical arc (rx ≠ ry): approximate with cubic Bézier segments.
+                // This avoids the averaging approximation entirely.
                 var bezs = arcToBeziers(cx, cy, arx, ary, rot, fa, fs, x, y);
                 for (var b = 0; b < size(bezs); b += 1)
                     res = append(res, bezs[b]);
@@ -1248,6 +1283,18 @@ function shapeToPathD(tag is string, attrs is map) returns string
 // ============================================================================
 // Section 10b: Hershey Simplex Font (text-to-path)
 // ============================================================================
+//
+// LIMITATION: FeatureScript cannot load external fonts at runtime, so the
+// Hershey Simplex font is embedded as a constant. This provides basic
+// single-stroke text rendering for <text> elements in SVGs.
+//
+// For higher-quality text with custom fonts:
+//   1. Use the Python CLI with --font to pre-convert text to paths:
+//      python3 -m svg_to_tex input.svg --font /path/to/font.ttf
+//   2. Or convert text to paths in your SVG editor (Inkscape: Path > Object to Path)
+//
+// The embedded font covers ASCII 32-126 (basic Latin). Non-ASCII characters
+// are rendered as '?' placeholders.
 
 // 95 ASCII printable characters (space=32 through tilde=126)
 // Format: glyphs separated by ";", each glyph = "width,x1,y1,x2,y2,..." with -1,-1 for pen-up
@@ -3131,8 +3178,27 @@ export const svgTexture = defineFeature(function(context is Context, id is Id, d
             return;
         }
 
-        // Parse SVG or SVGTEX
-        var svgData = detectAndParse(definition.svgFile.textData);
+        // TextData sanitization
+        var rawData = definition.svgFile.textData;
+        var dataLen = length(rawData);
+        if (dataLen > 500000)
+        {
+            reportFeatureError(context, id, "File too large (" ~ toString(dataLen) ~
+                " chars). Maximum supported size is 500,000 characters. Simplify the SVG or use SVGTEX format.");
+            return;
+        }
+
+        // Parse SVG or SVGTEX (with error handling for malformed input)
+        var svgData = undefined;
+        try
+        {
+            svgData = detectAndParse(rawData);
+        }
+        if (svgData == undefined)
+        {
+            reportFeatureError(context, id, "Failed to parse file. Ensure it is valid SVG or SVGTEX format.");
+            return;
+        }
 
         // Report warnings
         for (var w = 0; w < size(svgData.warnings); w += 1)

@@ -46,7 +46,12 @@ class TestIsCircular:
         assert is_circular(10, 10, 0) is True
 
     def test_nearly_circular(self):
-        assert is_circular(10, 10.05, 0) is True
+        # Within 0.1% tolerance (tightened from 1% to avoid averaging artifacts)
+        assert is_circular(10, 10.005, 0) is True
+
+    def test_slightly_elliptical(self):
+        # 0.5% difference — outside 0.1% tolerance, should be treated as elliptical
+        assert is_circular(10, 10.05, 0) is False
 
     def test_elliptical(self):
         assert is_circular(10, 20, 0) is False

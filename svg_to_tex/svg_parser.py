@@ -2,8 +2,9 @@
 Parse SVG XML, extract viewBox, and walk element tree to produce path data.
 """
 
+import re
 import xml.etree.ElementTree as ET
-from typing import List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional
 
 from .shapes import shape_to_path_d
 from .path_parser import parse_path
@@ -18,6 +19,88 @@ XLINK_NS = "http://www.w3.org/1999/xlink"
 # Elements that can contain paths
 PATH_ELEMENTS = {"path", "rect", "circle", "ellipse", "line", "polyline", "polygon"}
 GROUP_ELEMENTS = {"g", "svg", "defs", "symbol", "a", "switch", "clipPath", "mask"}
+
+# SVG presentation attributes that CSS can override
+_CSS_PROPS = {
+    "fill", "fill-rule", "fill-opacity", "stroke", "stroke-width",
+    "stroke-opacity", "stroke-linecap", "stroke-linejoin", "stroke-dasharray",
+    "opacity", "display", "visibility", "font-size", "font-family",
+    "text-anchor", "color",
+}
+
+
+def _parse_css_blocks(root: ET.Element) -> Dict[str, Dict[str, str]]:
+    """Parse <style> blocks in SVG and return a selector → properties map.
+
+    Supports simple selectors: .class, #id, element.
+    Comma-separated selectors are split into separate rules.
+    """
+    rules = {}
+    # Find all <style> elements (with or without namespace)
+    for style_elem in list(root.iter()):
+        tag = _strip_ns(style_elem.tag)
+        if tag != "style":
+            continue
+        css_text = style_elem.text or ""
+        # Remove CSS comments
+        css_text = re.sub(r'/\*.*?\*/', '', css_text, flags=re.DOTALL)
+        # Parse rule blocks: selector { declarations }
+        for match in re.finditer(r'([^{}]+)\{([^{}]*)\}', css_text):
+            selectors_str = match.group(1).strip()
+            decls_str = match.group(2).strip()
+            # Parse declarations
+            props = {}
+            for decl in decls_str.split(";"):
+                decl = decl.strip()
+                if ":" not in decl:
+                    continue
+                prop, val = decl.split(":", 1)
+                prop = prop.strip()
+                val = val.strip()
+                if prop:
+                    props[prop] = val
+            # Handle comma-separated selectors
+            for sel in selectors_str.split(","):
+                sel = sel.strip()
+                if sel:
+                    if sel in rules:
+                        rules[sel].update(props)
+                    else:
+                        rules[sel] = dict(props)
+    return rules
+
+
+def _apply_css_to_tree(root: ET.Element, css_rules: Dict[str, Dict[str, str]]) -> None:
+    """Walk element tree and apply CSS rules to element attributes.
+
+    CSS properties override presentation attributes but NOT inline styles
+    (inline style override is handled later by _get_fill_info/_get_stroke_info).
+    """
+    if not css_rules:
+        return
+    for elem in root.iter():
+        tag = _strip_ns(elem.tag)
+        cls = elem.get("class", "")
+        elem_id = elem.get("id", "")
+
+        # Collect matching CSS properties (element, class, id — in increasing specificity)
+        matched_props = {}
+        # Element selector
+        if tag in css_rules:
+            matched_props.update(css_rules[tag])
+        # Class selectors
+        for c in cls.split():
+            c = c.strip()
+            if c and f".{c}" in css_rules:
+                matched_props.update(css_rules[f".{c}"])
+        # ID selector (highest specificity among these)
+        if elem_id and f"#{elem_id}" in css_rules:
+            matched_props.update(css_rules[f"#{elem_id}"])
+
+        # Apply: CSS overrides presentation attributes (only for known CSS props)
+        for prop, val in matched_props.items():
+            if prop in _CSS_PROPS:
+                elem.set(prop, val)
 
 
 def _strip_ns(tag: str) -> str:
@@ -234,6 +317,10 @@ def parse_svg(
 
     # Resolve <use> elements first
     resolve_uses(root)
+
+    # Parse and apply CSS <style> blocks (CSS overrides presentation attrs)
+    css_rules = _parse_css_blocks(root)
+    _apply_css_to_tree(root, css_rules)
 
     # Convert <text> to <path> if fontTools is available
     if convert_text:
