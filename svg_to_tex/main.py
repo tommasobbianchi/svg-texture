@@ -18,6 +18,7 @@ from .svg_parser import parse_svg
 from .region_analyzer import filter_filled_paths, estimate_entity_count
 from .encoder import encode_svgtex
 from .stroke_outliner import stroke_to_outlines
+from .viewbox_clipper import clip_paths_to_viewbox
 
 
 def _check_svg_warnings(svg_content: str):
@@ -144,6 +145,11 @@ def main():
         action="store_true",
         help="Skip text-to-path conversion (text elements will be ignored)",
     )
+    parser.add_argument(
+        "--no-clip",
+        action="store_true",
+        help="Disable viewBox clipping (clipping is on by default for seamless tiling)",
+    )
 
     args = parser.parse_args()
 
@@ -177,6 +183,10 @@ def main():
     # Convert strokes to outlines
     if include_strokes:
         paths = stroke_to_outlines(paths, stroke_width_override=args.stroke_width)
+
+    # Clip paths to viewBox for seamless tiling
+    if not args.no_clip:
+        paths = clip_paths_to_viewbox(paths, viewbox)
 
     # Filter to filled paths
     filled_paths = filter_filled_paths(paths)

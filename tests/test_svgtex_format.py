@@ -903,11 +903,13 @@ class TestRealTextureSvgRoundtrip:
         from svg_to_tex.svg_parser import parse_svg
         from svg_to_tex.region_analyzer import filter_filled_paths
         from svg_to_tex.stroke_outliner import stroke_to_outlines
+        from svg_to_tex.viewbox_clipper import clip_paths_to_viewbox
         svg_path = os.path.join(TEXTURES_DIR, filename)
         with open(svg_path) as f:
             svg_content = f.read()
         viewbox, paths = parse_svg(svg_content, include_strokes=True)
         paths = stroke_to_outlines(paths)
+        paths = clip_paths_to_viewbox(paths, viewbox)
         filled = filter_filled_paths(paths)
         svgtex = encode_svgtex(viewbox, filled)
         return decode_svgtex(svgtex), svgtex
